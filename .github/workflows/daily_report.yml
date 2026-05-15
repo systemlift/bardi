@@ -22,7 +22,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Write service account JSON
-        run: echo '${{ secrets.GOOGLE_SA_JSON_CONTENT }}' > service_account.json
+        env:
+          SA_JSON: ${{ secrets.GOOGLE_SA_JSON_CONTENT }}
+        run: printf '%s' "$SA_JSON" > service_account.json
 
       - name: Run report
         env:
