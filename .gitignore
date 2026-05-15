@@ -1,0 +1,10 @@
+# Credentials — never commit these
+.env
+service_account.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
