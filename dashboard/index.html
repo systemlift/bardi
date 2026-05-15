@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bardi · Performance Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root {
+  --navy:#1B4D8E; --navy-dk:#13376A; --navy-lt:#2A5FA8;
+  --orange:#F47920; --orange-lt:#FF8C3A;
+  --bg:#EDF1F8; --surface:#fff; --text:#0D1E3A; --muted:#6272899;
+  --border:#D3DCF0; --success:#15803D; --danger:#DC2626;
+  --sw:230px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh;font-size:14px}
+
+/* ── Sidebar ── */
+.sb{width:var(--sw);background:var(--navy-dk);color:#fff;display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:200}
+.sb-logo{padding:22px 20px 18px;border-bottom:1px solid rgba(255,255,255,.1)}
+.sb-logo .name{font-family:'Barlow',sans-serif;font-weight:800;font-size:28px;letter-spacing:-0.5px;color:#fff}
+.sb-logo .name span{color:var(--orange)}
+.sb-logo .sub{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,.4);margin-top:2px}
+.nav{padding:12px 0;flex:1;overflow-y:auto}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;cursor:pointer;color:rgba(255,255,255,.6);font-size:13px;font-weight:500;border-left:3px solid transparent;transition:all .15s}
+.nav-item:hover{color:#fff;background:rgba(255,255,255,.06)}
+.nav-item.active{color:#fff;background:rgba(255,255,255,.1);border-left-color:var(--orange)}
+.nav-icon{font-size:15px;width:20px;text-align:center}
+.sb-foot{padding:14px 20px;border-top:1px solid rgba(255,255,255,.1);font-size:11px;color:rgba(255,255,255,.3);line-height:1.4}
+
+/* ── Main ── */
+.main{margin-left:var(--sw);flex:1;display:flex;flex-direction:column}
+
+/* ── Topbar ── */
+.topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:100;flex-wrap:wrap}
+.view-title{font-family:'Barlow',sans-serif;font-weight:700;font-size:17px;color:var(--navy);flex:1;min-width:120px}
+.ctrl{display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:13px}
+.ctrl label{color:#6B7A99;white-space:nowrap;font-size:12px}
+.ctrl select,.ctrl input{background:none;border:none;font-family:inherit;font-size:13px;color:var(--text);outline:none;cursor:pointer}
+.ctrl input[type=number]{width:90px;font-weight:600;color:var(--navy)}
+.custom-range{display:none;align-items:center;gap:6px}
+.custom-range.show{display:flex}
+.custom-range input[type=date]{padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:12px;outline:none;background:var(--surface)}
+.fresh{font-size:11px;color:#6B7A99;white-space:nowrap}
+
+/* ── Content ── */
+.content{padding:20px 24px;flex:1}
+.view{display:none}
+.view.active{display:block}
+
+/* ── KPI Grid ── */
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:20px}
+.kpi{background:var(--surface);border-radius:10px;padding:16px 18px;border:1px solid var(--border)}
+.kpi-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:#6B7A99;margin-bottom:6px}
+.kpi-val{font-family:'Barlow',sans-serif;font-weight:700;font-size:26px;color:var(--navy);line-height:1}
+.kpi-val.hi{color:var(--orange)}
+
+/* ── Chart row ── */
+.chart-row{display:grid;grid-template-columns:1fr 360px;gap:14px;margin-bottom:20px}
+.card{background:var(--surface);border-radius:10px;border:1px solid var(--border);padding:18px}
+.card-title{font-family:'Barlow',sans-serif;font-weight:700;font-size:14px;color:var(--navy);margin-bottom:14px}
+.chart-wrap{position:relative}
+
+/* ── 2-col ── */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+
+/* ── Table card ── */
+.tcard{background:var(--surface);border-radius:10px;border:1px solid var(--border);overflow:hidden;margin-bottom:16px}
+.thead{padding:14px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
+.thead h3{font-family:'Barlow',sans-serif;font-weight:700;font-size:14px;color:var(--navy)}
+.twrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+thead th{background:var(--bg);padding:9px 13px;text-align:left;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:#6B7A99;white-space:nowrap;cursor:pointer;user-select:none}
+thead th:hover{color:var(--navy)}
+tbody tr{border-bottom:1px solid var(--border)}
+tbody tr:last-child{border-bottom:none}
+tbody tr:hover{background:rgba(27,77,142,.03)}
+tbody td{padding:9px 13px;white-space:nowrap}
+.r{text-align:right;font-variant-numeric:tabular-nums}
+.pos{color:var(--success);font-weight:600}
+.neg{color:var(--danger);font-weight:600}
+.dim{color:#6B7A99}
+
+/* ── Rank badge ── */
+.rk{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;font-size:10px;font-weight:700;background:var(--bg);color:#6B7A99}
+.rk.g{background:#FEF3C7;color:#92400E}
+.rk.s{background:#F3F4F6;color:#374151}
+.rk.b{background:#FED7AA;color:#9A3412}
+
+/* ── Revenue bar ── */
+.bar-row{display:flex;align-items:center;gap:6px}
+.bar{height:5px;border-radius:3px;background:var(--navy);min-width:2px}
+
+/* ── Filters ── */
+.filters{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.filters select,.filters input[type=text]{padding:7px 11px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:12.5px;background:var(--surface);color:var(--text);outline:none}
+.filters select:focus,.filters input:focus{border-color:var(--navy)}
+
+/* ── Download btn ── */
+.dl-btn{display:inline-flex;align-items:center;gap:6px;background:var(--orange);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:background .15s}
+.dl-btn:hover{background:var(--orange-lt)}
+
+/* ── Notice ── */
+.notice{background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;font-size:12.5px;color:#78350F;margin-bottom:14px}
+
+/* ── Membership grid ── */
+.mem-grid{display:grid;grid-template-columns:1fr 340px;gap:14px;margin-bottom:16px}
+
+/* ── Budget note ── */
+.budget-note{font-size:11px;color:#6B7A99;margin-top:4px}
+
+/* ── Responsive ── */
+@media(max-width:1200px){
+  .kpis{grid-template-columns:repeat(3,1fr)}
+  .chart-row{grid-template-columns:1fr}
+  .two-col{grid-template-columns:1fr}
+  .mem-grid{grid-template-columns:1fr}
+}
+@media(max-width:768px){
+  .sb{display:none}
+  .main{margin-left:0}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .topbar{padding:10px 14px}
+  .content{padding:14px}
+}
+</style>
+</head>
+<body>
+
+<!-- ── Sidebar ── -->
+<aside class="sb">
+  <div class="sb-logo">
+    <div class="name">Bardi<span>.</span></div>
+    <div class="sub">Performance Dashboard</div>
+  </div>
+  <nav class="nav" id="nav">
+    <div class="nav-item active" data-view="overview"><span class="nav-icon">📊</span>Overview</div>
+    <div class="nav-item" data-view="sales-rep"><span class="nav-icon">👤</span>By Sales Rep</div>
+    <div class="nav-item" data-view="bus-unit"><span class="nav-icon">🏢</span>By Business Unit</div>
+    <div class="nav-item" data-view="job-type"><span class="nav-icon">🔧</span>By Job Type</div>
+    <div class="nav-item" data-view="jobs"><span class="nav-icon">📋</span>Job Drill-Down</div>
+    <div class="nav-item" data-view="memberships"><span class="nav-icon">🔑</span>Memberships</div>
+  </nav>
+  <div class="sb-foot" id="sb-fresh">Data refreshes daily</div>
+</aside>
+
+<!-- ── Main ── -->
+<main class="main">
+
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="view-title" id="view-title">Overview</div>
+
+    <div class="ctrl">
+      <label>Range</label>
+      <select id="preset" onchange="onPreset()">
+        <option value="7">Last 7 Days</option>
+        <option value="14" selected>Last 14 Days</option>
+        <option value="30">Last 30 Days</option>
+        <option value="mtd">Month to Date</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </div>
+    <div class="custom-range" id="custom-range">
+      <input type="date" id="d-from" onchange="onCustom()">
+      <span style="color:#6B7A99">→</span>
+      <input type="date" id="d-to" onchange="onCustom()">
+    </div>
+
+    <div class="ctrl">
+      <label>Monthly Budget $</label>
+      <input type="number" id="budget" value="99877" onchange="onBudget()">
+    </div>
+
+    <div class="fresh" id="fresh-top">–</div>
+  </header>
+
+  <div class="content">
+
+    <!-- ══ OVERVIEW ══ -->
+    <div class="view active" id="view-overview">
+      <div class="kpis">
+        <div class="kpi"><div class="kpi-lbl">Total Revenue</div><div class="kpi-val" id="k-rev">–</div></div>
+        <div class="kpi"><div class="kpi-lbl">Gross Margin</div><div class="kpi-val" id="k-margin">–</div></div>
+        <div class="kpi"><div class="kpi-lbl">Margin %</div><div class="kpi-val hi" id="k-mpct">–</div></div>
+        <div class="kpi"><div class="kpi-lbl">Avg Job Value</div><div class="kpi-val" id="k-avg">–</div></div>
+        <div class="kpi"><div class="kpi-lbl">Jobs &gt; $0</div><div class="kpi-val" id="k-jobs">–</div></div>
+        <div class="kpi"><div class="kpi-lbl">Labor % of Rev</div><div class="kpi-val" id="k-labor">–</div></div>
+      </div>
+
+      <div class="chart-row">
+        <div class="card">
+          <div class="card-title">Daily Revenue vs Budget</div>
+          <div class="chart-wrap" style="height:210px"><canvas id="ch-daily"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Revenue by Business Unit</div>
+          <div class="chart-wrap" style="height:210px"><canvas id="ch-bu"></canvas></div>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="tcard">
+          <div class="thead"><h3>Top 10 Technicians by Revenue</h3></div>
+          <div class="twrap"><table>
+            <thead><tr><th style="width:36px">#</th><th>Technician</th><th class="r">Revenue</th><th>Share</th></tr></thead>
+            <tbody id="tb-techs"></tbody>
+          </table></div>
+        </div>
+        <div class="tcard">
+          <div class="thead"><h3>Revenue by Job Type</h3></div>
+          <div class="twrap"><table>
+            <thead><tr><th>Job Type</th><th class="r">Revenue</th><th class="r">Jobs</th><th class="r">Margin%</th></tr></thead>
+            <tbody id="tb-jt-summary"></tbody>
+          </table></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ SALES REP ══ -->
+    <div class="view" id="view-sales-rep">
+      <div class="notice" id="rep-notice" style="display:none">
+        ⚠️ "Sold By" is not yet populated in the job data. Once the employee lookup is added to <code>run.py</code>, this view will fill in automatically.
+      </div>
+      <div class="tcard">
+        <div class="thead"><h3>Performance by Sales Rep</h3></div>
+        <div class="twrap"><table>
+          <thead><tr><th>Sales Rep</th><th class="r">Revenue</th><th class="r">Jobs</th><th class="r">Avg Job Value</th><th class="r">Gross Margin</th><th class="r">Margin %</th></tr></thead>
+          <tbody id="tb-reps"></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- ══ BUSINESS UNIT ══ -->
+    <div class="view" id="view-bus-unit">
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title">Revenue by Business Unit</div>
+        <div class="chart-wrap" style="height:200px"><canvas id="ch-bu2"></canvas></div>
+      </div>
+      <div class="tcard">
+        <div class="thead"><h3>Performance by Business Unit</h3></div>
+        <div class="twrap"><table>
+          <thead><tr><th>Business Unit</th><th class="r">Revenue</th><th class="r">Jobs</th><th class="r">Avg Job Value</th><th class="r">Gross Margin</th><th class="r">Margin %</th></tr></thead>
+          <tbody id="tb-bu"></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- ══ JOB TYPE ══ -->
+    <div class="view" id="view-job-type">
+      <div class="tcard">
+        <div class="thead"><h3>Performance by Job Type</h3></div>
+        <div class="twrap"><table>
+          <thead><tr><th>Job Type</th><th>Business Unit</th><th class="r">Revenue</th><th class="r">Jobs</th><th class="r">Avg Job Value</th><th class="r">Gross Margin</th><th class="r">Margin %</th></tr></thead>
+          <tbody id="tb-jt"></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- ══ JOBS ══ -->
+    <div class="view" id="view-jobs">
+      <div class="filters">
+        <select id="f-bu" onchange="renderJobs()"><option value="">All Business Units</option></select>
+        <select id="f-type" onchange="renderJobs()"><option value="">All Job Types</option></select>
+        <select id="f-tech" onchange="renderJobs()"><option value="">All Technicians</option></select>
+        <input type="text" id="f-search" placeholder="Search customer…" oninput="renderJobs()" style="width:190px">
+      </div>
+      <div class="tcard">
+        <div class="thead"><h3>Job Detail</h3><span id="jobs-ct" style="font-size:12px;color:#6B7A99"></span></div>
+        <div class="twrap"><table>
+          <thead><tr>
+            <th>Job #</th><th>Date</th><th>Customer</th><th>Job Type</th><th>Bus. Unit</th>
+            <th>Technician</th><th class="r">Revenue</th><th class="r">Gross Margin</th>
+            <th class="r">Margin %</th><th class="r">Labor</th><th class="r">Materials</th>
+          </tr></thead>
+          <tbody id="tb-jobs"></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- ══ MEMBERSHIPS ══ -->
+    <div class="view" id="view-memberships">
+      <div class="mem-grid">
+        <div class="tcard">
+          <div class="thead"><h3>Membership Summary — Current Month</h3></div>
+          <div class="twrap"><table>
+            <thead><tr><th>Membership Type</th><th class="r">Active</th><th class="r">Canceled</th><th class="r">Expired</th><th class="r">Suspended</th><th class="r">Total</th></tr></thead>
+            <tbody id="tb-mem-sum"></tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Status Distribution</div>
+          <div class="chart-wrap" style="height:210px"><canvas id="ch-mem"></canvas></div>
+        </div>
+      </div>
+      <div class="tcard">
+        <div class="thead">
+          <h3>Canceled &amp; Expired Members</h3>
+          <button class="dl-btn" onclick="dlCancelled()">⬇ Download Excel</button>
+        </div>
+        <div class="twrap"><table>
+          <thead><tr><th>Customer Name</th><th>Phone Number</th><th>Membership Type</th><th>Date</th><th>Status</th></tr></thead>
+          <tbody id="tb-cancelled"></tbody>
+        </table></div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</main>
+
+<script>
+// ═══════════════════════════════════════════════════════════ State
+let JOBS = [], MEM = {summary:[], cancelled:[]}, CFG = {};
+let charts = {}, filtersReady = false;
+
+// ═══════════════════════════════════════════════════════════ Mock data
+function makeMock() {
+  const BU_TYPES = {
+    'HVAC Sales':       ['HVAC Install','HVAC Sales'],
+    'HVAC Service':     ['HVAC Maintenance','HVAC Service','IAQ'],
+    'Plumbing Sales':   ['Plumbing Install','Excavation','Plumbing Sales'],
+    'Plumbing Service': ['Plumbing Service','Plumbing Maintenance'],
+    'Electrical Sales': ['Electrical Install'],
+    'Electrical':       ['Electrical Services','Electrical Maintenance']
+  };
+  const TECHS = ['Joseph Garcia','Travis Hester','Colt Hughes','Tommy Matheny','Leeson Oliver','Kirk Francis','Thomas Pyles','Andy Gamboa','Daniel Cahaley','Christopher Neely'];
+  const REPS  = ['Brad Berry','Jimmy Wise','Philo Mitman','Jonathan Avanzi','Nima Naderpour','Zac Lasek'];
+  const CX    = ['Johnson','Smith','Williams','Brown','Davis','Miller','Wilson','Moore','Taylor','Anderson','Thomas','Harris','Martin','Jackson','White'];
+  const BUS   = Object.keys(BU_TYPES);
+  const jobs  = [];
+  let n = 424000000;
+  const today = new Date();
+
+  for (let d = 13; d >= 0; d--) {
+    const dt = new Date(today); dt.setDate(dt.getDate()-d);
+    const ds = dt.toISOString().slice(0,10);
+    const cnt = 40 + Math.floor(Math.random()*25);
+    for (let i = 0; i < cnt; i++) {
+      const bu  = BUS[Math.floor(Math.random()*BUS.length)];
+      const jt  = BU_TYPES[bu][Math.floor(Math.random()*BU_TYPES[bu].length)];
+      const tch = TECHS[Math.floor(Math.random()*TECHS.length)];
+      const rep = REPS[Math.floor(Math.random()*REPS.length)];
+      const cx  = CX[Math.floor(Math.random()*CX.length)] + ' Residence';
+      let rev;
+      if (bu==='HVAC Sales') rev = 7000 + Math.random()*18000;
+      else if (bu.includes('Plumbing')) rev = 800 + Math.random()*8000;
+      else rev = 300 + Math.random()*2000;
+      rev = Math.round(rev*100)/100;
+      const mpct = .35 + Math.random()*.3;
+      const margin = Math.round(rev*mpct*100)/100;
+      const labor  = Math.round(rev*.12*100)/100;
+      const mat    = Math.round(rev*.1*100)/100;
+      jobs.push({
+        "Job #": String(++n), "Customer Name": cx, "Invoice Date": ds,
+        "Job Type": jt, "Business Unit": bu, "Sold By": rep,
+        "Primary Technician": tch,
+        "Jobs Total Revenue": String(rev),
+        "Jobs Gross Margin": String(margin),
+        "Jobs Gross Margin %": (mpct*100).toFixed(2)+"%",
+        "Total Labor Costs": String(labor),
+        "Material Costs": String(mat),
+        "Jobs Payments": String(rev), "Tax":"0","Returns":"0"
+      });
+    }
+  }
+  return jobs;
+}
+
+const MOCK_MEM = {
+  summary:[
+    {"Membership Type":"Gold Plan","Active":"1842","Canceled":"23","Expired":"8","Suspended":"4","Total":"1877"},
+    {"Membership Type":"Silver Plan","Active":"956","Canceled":"12","Expired":"5","Suspended":"2","Total":"975"},
+    {"Membership Type":"HVAC Only","Active":"612","Canceled":"7","Expired":"3","Suspended":"1","Total":"623"},
+    {"Membership Type":"Plumbing Only","Active":"234","Canceled":"4","Expired":"1","Suspended":"0","Total":"239"}
+  ],
+  cancelled:[
+    {"Customer Name":"James Patterson","Phone Number":"(770) 555-0142","Membership Type":"Gold Plan","Date":"2026-05-10","Status":"Canceled"},
+    {"Customer Name":"Maria Rodriguez","Phone Number":"(678) 555-0198","Membership Type":"Silver Plan","Date":"2026-05-09","Status":"Canceled"},
+    {"Customer Name":"Robert Chen","Phone Number":"(404) 555-0231","Membership Type":"Gold Plan","Date":"2026-05-08","Status":"Expired"},
+    {"Customer Name":"Linda Thompson","Phone Number":"(770) 555-0156","Membership Type":"HVAC Only","Date":"2026-05-07","Status":"Expired"},
+    {"Customer Name":"William Davis","Phone Number":"(678) 555-0287","Membership Type":"Gold Plan","Date":"2026-05-06","Status":"Canceled"}
+  ]
+};
+
+// ═══════════════════════════════════════════════════════════ Helpers
+const pm  = v => typeof v==='number'?v:parseFloat(String(v).replace(/[^0-9.\-]/g,''))||0;
+const pp  = v => { const s=String(v); return s.endsWith('%')?parseFloat(s):parseFloat(s)||0; };
+const fm  = n => { const a=Math.abs(n); return (n<0?'-':'')+'$'+(a>=1e6?(a/1e6).toFixed(1)+'M':a>=1000?(a/1000).toFixed(1)+'K':a.toFixed(0)); };
+const fmf = n => '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fp  = n => n.toFixed(1)+'%';
+
+function dateRange() {
+  const p = document.getElementById('preset').value;
+  const today = new Date().toISOString().slice(0,10);
+  if (p==='custom') return {from:document.getElementById('d-from').value||today, to:document.getElementById('d-to').value||today};
+  if (p==='mtd') { const d=new Date(); return {from:new Date(d.getFullYear(),d.getMonth(),1).toISOString().slice(0,10), to:today}; }
+  const from=new Date(Date.now()-(parseInt(p)-1)*86400000).toISOString().slice(0,10);
+  return {from, to:today};
+}
+
+function filtered() {
+  const {from,to}=dateRange();
+  return JOBS.filter(j=>{const d=j["Invoice Date"]||'';return d>=from&&d<=to;});
+}
+
+function kpis(jobs) {
+  const rev    = jobs.reduce((s,j)=>s+pm(j["Jobs Total Revenue"]),0);
+  const margin = jobs.reduce((s,j)=>s+pm(j["Jobs Gross Margin"]),0);
+  const labor  = jobs.reduce((s,j)=>s+pm(j["Total Labor Costs"]),0);
+  const paid   = jobs.filter(j=>pm(j["Jobs Total Revenue"])>0);
+  return {rev, margin, mpct:rev?margin/rev*100:0, avg:paid.length?rev/paid.length:0, cnt:paid.length, lpct:rev?labor/rev*100:0};
+}
+
+function groupBy(jobs, field) {
+  const g={};
+  for(const j of jobs){const k=j[field]||'Unknown';if(!g[k])g[k]=[];g[k].push(j);}
+  return g;
+}
+
+function agg(jobs) {
+  const rev=jobs.reduce((s,j)=>s+pm(j["Jobs Total Revenue"]),0);
+  const margin=jobs.reduce((s,j)=>s+pm(j["Jobs Gross Margin"]),0);
+  const labor=jobs.reduce((s,j)=>s+pm(j["Total Labor Costs"]),0);
+  const cnt=jobs.filter(j=>pm(j["Jobs Total Revenue"])>0).length;
+  return {rev, margin, mpct:rev?margin/rev*100:0, cnt, avg:cnt?rev/cnt:0, labor};
+}
+
+function dailyRevenue(jobs) {
+  const {from,to}=dateRange();
+  const map={};
+  let d=new Date(from+'T12:00:00'), end=new Date(to+'T12:00:00');
+  while(d<=end){map[d.toISOString().slice(0,10)]=0;d.setDate(d.getDate()+1);}
+  for(const j of jobs){const dt=j["Invoice Date"];if(dt in map)map[dt]+=pm(j["Jobs Total Revenue"]);}
+  return map;
+}
+
+function dailyBudget() {
+  const monthly=parseFloat(String(document.getElementById('budget').value).replace(/,/g,''))||0;
+  const {from}=dateRange();
+  const y=new Date(from).getFullYear(), mo=new Date(from).getMonth();
+  return monthly/new Date(y,mo+1,0).getDate();
+}
+
+// ═══════════════════════════════════════════════════════════ Render
+function renderOverview() {
+  const jobs=filtered(), k=kpis(jobs);
+  document.getElementById('k-rev').textContent   = fm(k.rev);
+  document.getElementById('k-margin').textContent= fm(k.margin);
+  document.getElementById('k-mpct').textContent  = fp(k.mpct);
+  document.getElementById('k-avg').textContent   = fm(k.avg);
+  document.getElementById('k-jobs').textContent  = k.cnt.toLocaleString();
+  document.getElementById('k-labor').textContent = fp(k.lpct);
+  renderDailyChart(jobs);
+  renderBUDonut(jobs,'ch-bu');
+  renderTopTechs(jobs);
+  renderJTSummary(jobs);
+}
+
+function renderDailyChart(jobs) {
+  const daily=dailyRevenue(jobs);
+  const labels=Object.keys(daily).map(d=>{
+    const dt=new Date(d+'T12:00:00');
+    return dt.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  });
+  const revenues=Object.values(daily);
+  const db=dailyBudget();
+  const budget=revenues.map(()=>db);
+
+  if(charts.daily)charts.daily.destroy();
+  charts.daily=new Chart(document.getElementById('ch-daily'),{
+    type:'bar',
+    data:{labels, datasets:[
+      {label:'Revenue',data:revenues,backgroundColor:'rgba(27,77,142,.75)',borderRadius:3,order:2},
+      {label:'Daily Budget',data:budget,type:'line',borderColor:'#F47920',borderWidth:2,borderDash:[5,3],pointRadius:0,order:1,tension:0}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{position:'top',labels:{font:{family:'DM Sans',size:11},boxWidth:10}}},
+      scales:{
+        x:{grid:{display:false},ticks:{font:{family:'DM Sans',size:10}}},
+        y:{grid:{color:'#E5EAF3'},ticks:{font:{family:'DM Sans',size:10},callback:v=>'$'+(v/1000).toFixed(0)+'K'}}
+      }}
+  });
+}
+
+const BU_COLORS=['#1B4D8E','#F47920','#2A5FA8','#FF8C3A','#133768','#FFB87A','#3D72C4','#FFC89A'];
+
+function renderBUDonut(jobs, id) {
+  const g=groupBy(jobs,'Business Unit');
+  const entries=Object.entries(g).map(([k,v])=>[k,agg(v).rev]).sort((a,b)=>b[1]-a[1]);
+  if(charts[id])charts[id].destroy();
+  charts[id]=new Chart(document.getElementById(id),{
+    type:'doughnut',
+    data:{labels:entries.map(e=>e[0]),datasets:[{data:entries.map(e=>e[1]),backgroundColor:BU_COLORS,borderWidth:0}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{position:'right',labels:{font:{family:'DM Sans',size:11},boxWidth:10,padding:6}},
+        tooltip:{callbacks:{label:ctx=>' '+fm(ctx.raw)}}
+      }}
+  });
+}
+
+function renderTopTechs(jobs) {
+  const g=groupBy(jobs,'Primary Technician');
+  const entries=Object.entries(g)
+    .map(([k,v])=>({name:k,...agg(v)}))
+    .filter(e=>e.name&&e.name!=='Unknown')
+    .sort((a,b)=>b.rev-a.rev).slice(0,10);
+  const maxRev=entries[0]?.rev||1;
+  document.getElementById('tb-techs').innerHTML=entries.map((e,i)=>`
+    <tr>
+      <td><span class="rk${i===0?' g':i===1?' s':i===2?' b':''}">${i+1}</span></td>
+      <td>${e.name}</td>
+      <td class="r">${fm(e.rev)}</td>
+      <td style="min-width:90px"><div class="bar-row"><div class="bar" style="width:${Math.round(e.rev/maxRev*90)}px"></div></div></td>
+    </tr>`).join('');
+}
+
+function renderJTSummary(jobs) {
+  const g=groupBy(jobs,'Job Type');
+  const entries=Object.entries(g).map(([k,v])=>({jt:k,...agg(v)})).sort((a,b)=>b.rev-a.rev);
+  document.getElementById('tb-jt-summary').innerHTML=entries.map(e=>`
+    <tr>
+      <td>${e.jt}</td>
+      <td class="r">${fm(e.rev)}</td>
+      <td class="r">${e.cnt}</td>
+      <td class="r ${e.mpct>=50?'pos':e.mpct<35?'neg':''}">${fp(e.mpct)}</td>
+    </tr>`).join('');
+}
+
+function renderSalesRep() {
+  const jobs=filtered();
+  const g=groupBy(jobs,'Sold By');
+  const hasData=Object.keys(g).some(k=>k&&k!=='Unknown'&&k!=='');
+  document.getElementById('rep-notice').style.display=hasData?'none':'block';
+  const entries=Object.entries(g)
+    .map(([k,v])=>({rep:k,...agg(v)}))
+    .filter(e=>e.rep&&e.rep!=='Unknown'&&e.rep!==''&&e.rev>0)
+    .sort((a,b)=>b.rev-a.rev);
+  const tb=document.getElementById('tb-reps');
+  if(!entries.length){tb.innerHTML='<tr><td colspan="6" style="padding:20px;text-align:center;color:#6B7A99">No sales rep data available yet.</td></tr>';return;}
+  tb.innerHTML=entries.map(e=>`
+    <tr>
+      <td><strong>${e.rep}</strong></td>
+      <td class="r">${fmf(e.rev)}</td>
+      <td class="r">${e.cnt}</td>
+      <td class="r">${fm(e.avg)}</td>
+      <td class="r">${fmf(e.margin)}</td>
+      <td class="r ${e.mpct>=50?'pos':e.mpct<35?'neg':''}">${fp(e.mpct)}</td>
+    </tr>`).join('');
+}
+
+function renderBusUnit() {
+  const jobs=filtered();
+  renderBUDonut(jobs,'ch-bu2');
+  const g=groupBy(jobs,'Business Unit');
+  const entries=Object.entries(g).map(([k,v])=>({bu:k,...agg(v)})).sort((a,b)=>b.rev-a.rev);
+  document.getElementById('tb-bu').innerHTML=entries.map(e=>`
+    <tr>
+      <td><strong>${e.bu}</strong></td>
+      <td class="r">${fmf(e.rev)}</td>
+      <td class="r">${e.cnt}</td>
+      <td class="r">${fm(e.avg)}</td>
+      <td class="r">${fmf(e.margin)}</td>
+      <td class="r ${e.mpct>=50?'pos':e.mpct<35?'neg':''}">${fp(e.mpct)}</td>
+    </tr>`).join('');
+}
+
+function renderJobType() {
+  const jobs=filtered();
+  const byType={};
+  for(const j of jobs){
+    const k=j["Job Type"]||'Unknown';
+    if(!byType[k])byType[k]={bu:j["Business Unit"]||'',jobs:[]};
+    byType[k].jobs.push(j);
+  }
+  const entries=Object.entries(byType)
+    .map(([k,v])=>({jt:k,bu:v.bu,...agg(v.jobs)}))
+    .sort((a,b)=>b.rev-a.rev);
+  document.getElementById('tb-jt').innerHTML=entries.map(e=>`
+    <tr>
+      <td>${e.jt}</td>
+      <td><span class="dim" style="font-size:11px">${e.bu}</span></td>
+      <td class="r">${fmf(e.rev)}</td>
+      <td class="r">${e.cnt}</td>
+      <td class="r">${fm(e.avg)}</td>
+      <td class="r">${fmf(e.margin)}</td>
+      <td class="r ${e.mpct>=50?'pos':e.mpct<35?'neg':''}">${fp(e.mpct)}</td>
+    </tr>`).join('');
+}
+
+function renderJobs() {
+  const jobs=filtered();
+  // Populate dropdowns once
+  if(!filtersReady){
+    const buSel=document.getElementById('f-bu');
+    const tySel=document.getElementById('f-type');
+    const tcSel=document.getElementById('f-tech');
+    [...new Set(jobs.map(j=>j["Business Unit"]).filter(Boolean))].sort().forEach(v=>buSel.add(new Option(v,v)));
+    [...new Set(jobs.map(j=>j["Job Type"]).filter(Boolean))].sort().forEach(v=>tySel.add(new Option(v,v)));
+    [...new Set(jobs.map(j=>j["Primary Technician"]).filter(Boolean))].sort().forEach(v=>tcSel.add(new Option(v,v)));
+    filtersReady=true;
+  }
+  const buV=document.getElementById('f-bu').value;
+  const tyV=document.getElementById('f-type').value;
+  const tcV=document.getElementById('f-tech').value;
+  const srch=document.getElementById('f-search').value.toLowerCase();
+  const show=jobs.filter(j=>{
+    if(buV&&j["Business Unit"]!==buV)return false;
+    if(tyV&&j["Job Type"]!==tyV)return false;
+    if(tcV&&j["Primary Technician"]!==tcV)return false;
+    if(srch&&!(j["Customer Name"]||'').toLowerCase().includes(srch))return false;
+    return true;
+  });
+  document.getElementById('jobs-ct').textContent=show.length.toLocaleString()+' jobs';
+  document.getElementById('tb-jobs').innerHTML=show.slice(0,250).map(j=>{
+    const rev=pm(j["Jobs Total Revenue"]), mg=pm(j["Jobs Gross Margin"]);
+    const mpct=rev?mg/rev*100:0;
+    return `<tr>
+      <td style="font-family:monospace;font-size:11px">${j["Job #"]||''}</td>
+      <td>${j["Invoice Date"]||''}</td>
+      <td>${j["Customer Name"]||''}</td>
+      <td>${j["Job Type"]||''}</td>
+      <td><span class="dim" style="font-size:11px">${j["Business Unit"]||''}</span></td>
+      <td>${j["Primary Technician"]||''}</td>
+      <td class="r">${fmf(rev)}</td>
+      <td class="r">${fmf(mg)}</td>
+      <td class="r ${mpct>=50?'pos':mpct<35&&mpct!==0?'neg':''}">${fp(mpct)}</td>
+      <td class="r">${fm(pm(j["Total Labor Costs"]))}</td>
+      <td class="r">${fm(pm(j["Material Costs"]))}</td>
+    </tr>`;
+  }).join('')+(show.length>250?`<tr><td colspan="11" style="text-align:center;padding:10px;color:#6B7A99;font-size:12px">Showing 250 of ${show.length}. Use filters to narrow.</td></tr>`:'');
+}
+
+function renderMemberships() {
+  const {summary, cancelled}=MEM;
+  // Summary table
+  let tA=0,tC=0,tE=0,tS=0,tT=0;
+  document.getElementById('tb-mem-sum').innerHTML=(summary.length?summary:[]).map(r=>{
+    const a=+r["Active"]||0,c=+r["Canceled"]||0,e=+r["Expired"]||0,s=+r["Suspended"]||0,t=+r["Total"]||0;
+    tA+=a;tC+=c;tE+=e;tS+=s;tT+=t;
+    return `<tr><td>${r["Membership Type"]||''}</td><td class="r pos">${a.toLocaleString()}</td><td class="r neg">${c.toLocaleString()}</td><td class="r neg">${e.toLocaleString()}</td><td class="r dim">${s.toLocaleString()}</td><td class="r"><strong>${t.toLocaleString()}</strong></td></tr>`;
+  }).join('')+`<tr style="border-top:2px solid var(--border);font-weight:600"><td>Total</td><td class="r pos">${tA.toLocaleString()}</td><td class="r neg">${tC.toLocaleString()}</td><td class="r neg">${tE.toLocaleString()}</td><td class="r dim">${tS.toLocaleString()}</td><td class="r">${tT.toLocaleString()}</td></tr>`;
+  // Donut
+  if(charts.mem)charts.mem.destroy();
+  charts.mem=new Chart(document.getElementById('ch-mem'),{
+    type:'doughnut',
+    data:{labels:['Active','Canceled','Expired','Suspended'],datasets:[{data:[tA,tC,tE,tS],backgroundColor:['#1B4D8E','#DC2626','#F47920','#6B7A99'],borderWidth:0}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{position:'right',labels:{font:{family:'DM Sans',size:12},padding:10}},
+               tooltip:{callbacks:{label:ctx=>` ${ctx.label}: ${ctx.raw.toLocaleString()}`}}}}
+  });
+  // Cancelled table
+  document.getElementById('tb-cancelled').innerHTML=(cancelled.length?cancelled:[]).map(r=>`
+    <tr>
+      <td>${r["Customer Name"]||''}</td>
+      <td style="font-family:monospace;font-size:11px">${r["Phone Number"]||''}</td>
+      <td>${r["Membership Type"]||''}</td>
+      <td>${r["Date"]||''}</td>
+      <td><span style="color:${r["Status"]==='Canceled'?'var(--danger)':'var(--orange)'};font-weight:600;font-size:11px">${r["Status"]||''}</span></td>
+    </tr>`).join('')||(cancelled.length===0?'<tr><td colspan="5" style="padding:20px;text-align:center;color:#6B7A99">No canceled or expired members in current period.</td></tr>':'');
+}
+
+// ═══════════════════════════════════════════════════════════ Download
+function dlCancelled() {
+  const rows=MEM.cancelled;
+  if(!rows.length){alert('No data to download.');return;}
+  const ws=XLSX.utils.json_to_sheet(rows.map(r=>({
+    "Customer Name":r["Customer Name"]||'',
+    "Phone Number":r["Phone Number"]||'',
+    "Membership Type":r["Membership Type"]||'',
+    "Date":r["Date"]||'',
+    "Status":r["Status"]||''
+  })));
+  ws['!cols']=[{wch:25},{wch:16},{wch:25},{wch:14},{wch:12}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Canceled & Expired');
+  XLSX.writeFile(wb,`Bardi_Membership_Cancellations_${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+
+// ═══════════════════════════════════════════════════════════ Navigation
+const VIEW_TITLES={overview:'Overview','sales-rep':'By Sales Rep','bus-unit':'By Business Unit','job-type':'By Job Type',jobs:'Job Drill-Down',memberships:'Memberships'};
+
+function switchView(id) {
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('view-'+id).classList.add('active');
+  document.querySelector(`[data-view="${id}"]`).classList.add('active');
+  document.getElementById('view-title').textContent=VIEW_TITLES[id];
+  renderView(id);
+}
+
+function renderView(id) {
+  filtersReady=id!=='jobs'?false:filtersReady; // reset filters when date changes
+  switch(id){
+    case 'overview':     renderOverview();   break;
+    case 'sales-rep':    renderSalesRep();   break;
+    case 'bus-unit':     renderBusUnit();    break;
+    case 'job-type':     renderJobType();    break;
+    case 'jobs':         renderJobs();       break;
+    case 'memberships':  renderMemberships();break;
+  }
+}
+
+function renderAll() {
+  filtersReady=false;
+  document.getElementById('f-bu').innerHTML='<option value="">All Business Units</option>';
+  document.getElementById('f-type').innerHTML='<option value="">All Job Types</option>';
+  document.getElementById('f-tech').innerHTML='<option value="">All Technicians</option>';
+  const id=document.querySelector('.nav-item.active')?.dataset.view||'overview';
+  renderView(id);
+}
+
+// ═══════════════════════════════════════════════════════════ Events
+function onPreset() {
+  document.getElementById('custom-range').classList.toggle('show', document.getElementById('preset').value==='custom');
+  renderAll();
+}
+function onCustom() {
+  if(document.getElementById('d-from').value && document.getElementById('d-to').value) renderAll();
+}
+function onBudget() { renderAll(); }
+
+document.getElementById('nav').addEventListener('click', e=>{
+  const item=e.target.closest('.nav-item');
+  if(item) switchView(item.dataset.view);
+});
+
+// ═══════════════════════════════════════════════════════════ Load
+async function load() {
+  let mock=false;
+  try {
+    const [jr, mr] = await Promise.all([fetch('data/jobs.json'), fetch('data/memberships.json')]);
+    if(!jr.ok) throw new Error('no jobs');
+    const jd=await jr.json();
+    JOBS=jd.rows||[];
+    const ts=jd.exported_at?new Date(jd.exported_at).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'–';
+    document.getElementById('fresh-top').textContent='Updated '+ts;
+    document.getElementById('sb-fresh').textContent='Updated '+ts;
+    if(mr.ok) MEM=await mr.json();
+    try{const cr=await fetch('data/config.json');if(cr.ok)CFG=await cr.json();}catch(e){}
+  } catch(e) {
+    mock=true;
+    JOBS=makeMock();
+    MEM=MOCK_MEM;
+    document.getElementById('fresh-top').textContent='⚠ Preview — sample data';
+    document.getElementById('sb-fresh').textContent='⚠ Preview mode';
+  }
+
+  // Budget from config or localStorage
+  const saved=localStorage.getItem('bardi_budget');
+  const cfgBudget=CFG['monthly_budget'];
+  if(saved) document.getElementById('budget').value=saved;
+  else if(cfgBudget) document.getElementById('budget').value=cfgBudget;
+
+  // Default custom date inputs
+  const today=new Date().toISOString().slice(0,10);
+  const ago14=new Date(Date.now()-13*86400000).toISOString().slice(0,10);
+  document.getElementById('d-from').value=ago14;
+  document.getElementById('d-to').value=today;
+
+  renderAll();
+}
+
+document.getElementById('budget').addEventListener('change',()=>{
+  localStorage.setItem('bardi_budget', document.getElementById('budget').value);
+  renderAll();
+});
+
+load();
+</script>
+</body>
+</html>

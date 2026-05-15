@@ -13,7 +13,9 @@ import os
 import sys
 import time
 import socket
+import argparse
 import requests
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -34,12 +36,12 @@ SA_JSON_PATH     = os.environ["GOOGLE_SA_JSON"]
 SCOPES           = ["https://www.googleapis.com/auth/spreadsheets"]
 
 SUMMARY_TAB      = "Membership Summary"
-CANCELLED_TAB    = "Cancelled Members"
+CANCELLED_TAB    = "Canceled & Expired Members"
 
 SUMMARY_HEADERS  = [
     "Membership Type",
     "Active",
-    "Cancelled",
+    "Canceled",
     "Suspended",
     "Expired",
     "Total",
@@ -49,7 +51,7 @@ CANCELLED_HEADERS = [
     "Customer Name",
     "Phone Number",
     "Membership Type",
-    "Cancel Date",
+    "Date",
     "Status",
 ]
 
@@ -111,9 +113,14 @@ def st_get_all(token: str, path: str, params: dict = None) -> list:
 
 # ── Data fetchers ─────────────────────────────────────────────────────────────
 
-def get_all_memberships(token: str) -> list:
-    """Pull every customer membership regardless of status."""
-    return st_get_all(token, f"/memberships/v2/tenant/{ST_TENANT_ID}/memberships")
+def get_all_memberships(token: str, from_date: str = None, to_date: str = None) -> list:
+    """Pull memberships modified within the given date range."""
+    params = {}
+    if from_date:
+        params["modifiedOnOrAfter"] = f"{from_date}T00:00:00Z"
+    if to_date:
+        params["modifiedOnOrBefore"] = f"{to_date}T23:59:59Z"
+    return st_get_all(token, f"/memberships/v2/tenant/{ST_TENANT_ID}/memberships", params)
 
 
 def get_customer(token: str, customer_id: int) -> dict:
@@ -128,6 +135,28 @@ def get_customer(token: str, customer_id: int) -> dict:
     return {}
 
 
+def get_membership_types(token: str) -> dict:
+    """Returns {membership_type_id: name}."""
+    types = st_get_all(token, f"/memberships/v2/tenant/{ST_TENANT_ID}/membership-types")
+    return {t["id"]: t.get("name", "") for t in types}
+
+
+def get_customer_contacts(token: str, customer_id: int) -> str:
+    """Fetch phone number from the contacts endpoint."""
+    url = f"{ST_BASE_URL}/crm/v2/tenant/{ST_TENANT_ID}/customers/{customer_id}/contacts"
+    try:
+        resp = SESSION.get(url, headers=st_headers(token), timeout=15)
+        if resp.ok:
+            for contact in (resp.json().get("data") or []):
+                phone = contact.get("value") or ""
+                ctype = (contact.get("type") or "").lower()
+                if phone and ("phone" in ctype or "mobile" in ctype or "cell" in ctype or ctype == ""):
+                    return phone
+    except Exception:
+        pass
+    return ""
+
+
 def extract_phone(customer: dict) -> str:
     """Pull the first available phone number from contacts."""
     for contact in (customer.get("contacts") or []):
@@ -140,14 +169,14 @@ def extract_phone(customer: dict) -> str:
 
 # ── Build report data ─────────────────────────────────────────────────────────
 
-def build_summary(memberships: list) -> list[list]:
+def build_summary(memberships: list, type_map: dict) -> list[list]:
     """Aggregate counts by membership type and status."""
     from collections import defaultdict
-    # {type_name: {status: count}}
     counts = defaultdict(lambda: defaultdict(int))
 
     for m in memberships:
-        type_name = (m.get("membershipType") or {}).get("name") or m.get("type") or "Unknown"
+        type_id   = m.get("membershipTypeId")
+        type_name = type_map.get(type_id, f"ID:{type_id}") if type_id else "Unknown"
         status    = (m.get("status") or "Unknown").capitalize()
         counts[type_name][status] += 1
 
@@ -158,7 +187,7 @@ def build_summary(memberships: list) -> list[list]:
         rows.append([
             type_name,
             c.get("Active", 0),
-            c.get("Cancelled", 0),
+            c.get("Canceled", 0),
             c.get("Suspended", 0),
             c.get("Expired", 0),
             total,
@@ -166,27 +195,26 @@ def build_summary(memberships: list) -> list[list]:
     return rows
 
 
-def build_cancelled(token: str, memberships: list) -> list[list]:
-    """Build cancelled member rows with customer name, phone, type, date."""
+def build_cancelled(token: str, memberships: list, type_map: dict) -> list[list]:
+    """Build canceled and expired member rows with customer name, phone, type, date."""
     cancelled = [m for m in memberships
-                 if (m.get("status") or "").lower() == "cancelled"]
+                 if (m.get("status") or "").lower() in ("canceled", "cancelled", "expired")]
 
-    print(f"  {len(cancelled)} cancelled membership(s) found.")
+    print(f"  {len(cancelled)} canceled/expired membership(s) found.")
 
     rows = [CANCELLED_HEADERS]
     for i, m in enumerate(cancelled, 1):
-        customer_id = (m.get("customer") or {}).get("id") or m.get("customerId")
-        type_name   = (m.get("membershipType") or {}).get("name") or m.get("type") or ""
-        cancel_date = (m.get("cancelledOn") or m.get("modifiedOn") or "")[:10]
-        status      = (m.get("status") or "").capitalize()
+        customer_id    = m.get("customerId")
+        type_id        = m.get("membershipTypeId")
+        type_name      = type_map.get(type_id, f"ID:{type_id}")
+        cancel_date    = (m.get("cancellationDate") or m.get("to") or m.get("modifiedOn") or "")[:10]
+        status         = (m.get("status") or "").capitalize()
 
         print(f"  [{i}/{len(cancelled)}] Fetching customer {customer_id}...", end="", flush=True)
 
-        customer     = get_customer(token, customer_id) if customer_id else {}
-        customer_name = (customer.get("name")
-                         or (m.get("customer") or {}).get("name")
-                         or "")
-        phone        = extract_phone(customer)
+        customer      = get_customer(token, customer_id) if customer_id else {}
+        customer_name = customer.get("name", "")
+        phone         = get_customer_contacts(token, customer_id) if customer_id else ""
 
         rows.append([customer_name, phone, type_name, cancel_date, status])
         print(" done")
@@ -233,22 +261,35 @@ def write_tab(svc, tab_name: str, rows: list[list]):
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
+    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    today    = datetime.now().strftime("%Y-%m-%d")
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--from", dest="from_date", default=week_ago, metavar="YYYY-MM-DD")
+    parser.add_argument("--to",   dest="to_date",   default=today,    metavar="YYYY-MM-DD")
+    args = parser.parse_args()
+
+    print(f"Date range: {args.from_date} to {args.to_date}")
     print("Authenticating to ServiceTitan...")
     token = get_st_token()
 
-    print("Fetching all memberships...")
-    memberships = get_all_memberships(token)
-    print(f"  {len(memberships)} total membership record(s) found.")
+    print("Fetching memberships...")
+    memberships = get_all_memberships(token, from_date=args.from_date, to_date=args.to_date)
+    print(f"  {len(memberships)} membership record(s) found in range.")
 
     if not memberships:
         print("No membership data returned. Check API permissions.")
         sys.exit(0)
 
-    print("Building membership summary...")
-    summary_rows = build_summary(memberships)
+    print("Fetching membership types...")
+    type_map = get_membership_types(token)
+    print(f"  {len(type_map)} membership type(s) loaded.")
 
-    print("Building cancelled members list...")
-    cancelled_rows = build_cancelled(token, memberships)
+    print("Building membership summary...")
+    summary_rows = build_summary(memberships, type_map)
+
+    print("Building canceled/expired members list...")
+    cancelled_rows = build_cancelled(token, memberships, type_map)
 
     print("Connecting to Google Sheets...")
     svc = sheets_client()
