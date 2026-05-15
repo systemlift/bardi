@@ -23,7 +23,7 @@ jobs:
 
       - name: Write service account JSON
         env:
-          SA_JSON: ${{ secrets.GOOGLE_SA_JSON_CONTENT }}
+          SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
         run: printf '%s' "$SA_JSON" > service_account.json
 
       - name: Run report
