@@ -15,7 +15,6 @@ from datetime import datetime, timedelta
 
 import time
 import socket
-import concurrent.futures
 import requests
 from dotenv import load_dotenv
 
@@ -129,6 +128,8 @@ def st_get_all(token: str, path: str, params: dict = None, timeout: int = 20) ->
                 print(f" [retry {attempt+1} in {wait}s]", end="", flush=True)
                 time.sleep(wait)
         if not resp.ok:
+            print(f" [{path.split('/')[-1]} HTTP {resp.status_code}: {resp.text[:120]}]",
+                  end="", flush=True)
             return results
         data = resp.json()
         results.extend(data.get("data", []))
@@ -141,11 +142,13 @@ def st_get_all(token: str, path: str, params: dict = None, timeout: int = 20) ->
 # ── Data fetchers ────────────────────────────────────────────────────────────
 
 def get_completed_jobs(token: str, from_date: str, to_date: str) -> list:
-    return st_get_all(token, f"/jpm/v2/tenant/{ST_TENANT_ID}/jobs", {
+    jobs = st_get_all(token, f"/jpm/v2/tenant/{ST_TENANT_ID}/jobs", {
         "completedOnOrAfter":  f"{from_date}T00:00:00Z",
         "completedOnOrBefore": f"{to_date}T23:59:59Z",
         "jobStatus":           "Completed",
     })
+    # Defensive client-side filter: only Completed jobs make it through.
+    return [j for j in jobs if (j.get("jobStatus") or "").lower() == "completed"]
 
 
 def get_invoices(token: str, job_id: int) -> list:
@@ -163,25 +166,20 @@ def get_po_costs(token: str, job_id: int) -> float:
 
 def get_campaign_names(token: str) -> dict:
     """Returns {campaign_id: campaign_name}."""
-    campaigns = st_get_all(token, f"/crm/v2/tenant/{ST_TENANT_ID}/campaigns")
+    campaigns = st_get_all(token, f"/marketing/v2/tenant/{ST_TENANT_ID}/campaigns")
     return {c["id"]: c.get("name", "") for c in campaigns}
 
 
-def get_technicians_by_job(token: str, from_date: str, to_date: str) -> dict:
-    """Returns {job_id: technician_name} for the date range."""
-    appts = st_get_all(token, f"/jpm/v2/tenant/{ST_TENANT_ID}/appointments", {
-        "startsOnOrAfter":  f"{from_date}T00:00:00Z",
-        "startsOnOrBefore": f"{to_date}T23:59:59Z",
+def get_technician_for_job(token: str, job_id: int) -> str:
+    """Return the first assigned technician's name for a job (empty if none)."""
+    assignments = st_get_all(token, f"/dispatch/v2/tenant/{ST_TENANT_ID}/appointment-assignments", {
+        "jobId": job_id,
     })
-    result = {}
-    for appt in appts:
-        jid = appt.get("jobId")
-        if not jid or jid in result:
-            continue
-        for t in (appt.get("technicians") or []):
-            if t.get("isPrimary") or t.get("isPrimaryTechnician") or jid not in result:
-                result[jid] = (t.get("technician") or {}).get("name", "") or t.get("name", "")
-    return result
+    for a in assignments:
+        name = a.get("technicianName") or ""
+        if name:
+            return name
+    return ""
 
 
 EMPTY_PAY = {
@@ -189,49 +187,77 @@ EMPTY_PAY = {
     "labor_burden": 0.0, "paid_hours": 0.0, "worked_hours": 0.0,
 }
 
+# ServiceTitan's gross-pay-items and payroll-adjustments endpoints silently
+# ignore jobId filters, so we bulk-fetch a date window and bucket in memory.
+PAYROLL_LOOKBACK_DAYS = 30
 
-def _fetch_payroll_inner(token: str, job_id: int) -> dict:
-    """Runs in a worker thread so we can enforce a hard wall-clock timeout."""
-    result = dict(EMPTY_PAY)
-    session = requests.Session()
-    hdrs = st_headers(token)
 
-    resp = session.get(
-        f"{ST_BASE_URL}/payroll/v2/tenant/{ST_TENANT_ID}/gross-pay-items",
-        headers=hdrs, params={"jobId": job_id, "pageSize": 500}, timeout=10,
+def get_technician_burden_rates(token: str) -> dict:
+    """Return {technicianId: burdenRate $/hr}."""
+    techs = st_get_all(token, f"/settings/v2/tenant/{ST_TENANT_ID}/technicians")
+    return {t["id"]: float(t.get("burdenRate") or 0) for t in techs if t.get("id")}
+
+
+def get_gross_pay_by_job(token: str, from_date: str, to_date: str, burden_by_tech: dict) -> dict:
+    """Bulk-fetch gross-pay-items for the window and bucket by jobId.
+    Labor burden = sum(paidDurationHours * technician.burdenRate)."""
+    start = (datetime.strptime(from_date, "%Y-%m-%d")
+             - timedelta(days=PAYROLL_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    end   = (datetime.strptime(to_date, "%Y-%m-%d")
+             + timedelta(days=1)).strftime("%Y-%m-%d")
+    items = st_get_all(token, f"/payroll/v2/tenant/{ST_TENANT_ID}/gross-pay-items", {
+        "dateOnOrAfter":  start,
+        "dateOnOrBefore": end,
+    })
+    by_job = {}
+    for it in items:
+        jid = it.get("jobId")
+        if not jid:
+            continue
+        bucket = by_job.setdefault(jid, dict(EMPTY_PAY))
+        itype  = (it.get("grossPayItemType") or "").lower()
+        amount = float(it.get("amount") or 0)
+        hours  = float(it.get("paidDurationHours") or 0)
+        if "performance" in itype or "spiff" in itype or "bonus" in itype:
+            bucket["performance_pay"] += amount
+        else:
+            bucket["labor_pay"]  += amount
+            bucket["paid_hours"] += hours
+        bucket["worked_hours"]  += hours
+        # Burden is paid hours x technician burden rate; only employees on the
+        # clock accrue burden, so skip bonus/spiff rows (their hours are 0 anyway).
+        tech_id = it.get("employeeId")
+        rate    = burden_by_tech.get(tech_id, 0.0)
+        bucket["labor_burden"] += hours * rate
+    return by_job
+
+
+def get_adjustments_by_invoice(token: str, from_date: str) -> dict:
+    """Bulk-fetch active payroll-adjustments and bucket by invoiceId."""
+    start = (datetime.strptime(from_date, "%Y-%m-%d")
+             - timedelta(days=PAYROLL_LOOKBACK_DAYS)).strftime("%Y-%m-%dT00:00:00Z")
+    adjustments = st_get_all(token, f"/payroll/v2/tenant/{ST_TENANT_ID}/payroll-adjustments", {
+        "modifiedOnOrAfter": start,
+    })
+    by_invoice = {}
+    for adj in adjustments:
+        if not adj.get("active", True):
+            continue
+        inv_id = adj.get("invoiceId")
+        if not inv_id:
+            continue
+        by_invoice[inv_id] = by_invoice.get(inv_id, 0.0) + float(adj.get("amount") or 0)
+    return by_invoice
+
+
+def get_payroll_for_job(job_id: int, invoices: list,
+                        pay_by_job: dict, adj_by_invoice: dict) -> dict:
+    """Lookup payroll for a single job from pre-fetched dicts."""
+    result = dict(pay_by_job.get(job_id, EMPTY_PAY))
+    result["payroll_adjustments"] = sum(
+        adj_by_invoice.get(inv.get("id"), 0.0) for inv in invoices
     )
-    if resp.ok:
-        for item in resp.json().get("data", []):
-            itype  = (item.get("grossPayItemType") or "").lower()
-            amount = float(item.get("amount") or 0)
-            hours  = float(item.get("paidDurationHours") or 0)
-            if "performance" in itype or "spiff" in itype or "bonus" in itype:
-                result["performance_pay"] += amount
-            else:
-                result["labor_pay"]  += amount
-                result["paid_hours"] += hours
-            result["worked_hours"] += hours
-
-    resp2 = session.get(
-        f"{ST_BASE_URL}/payroll/v2/tenant/{ST_TENANT_ID}/payroll-adjustments",
-        headers=hdrs, params={"jobId": job_id, "pageSize": 500}, timeout=10,
-    )
-    if resp2.ok:
-        for adj in resp2.json().get("data", []):
-            if adj.get("active", True):
-                result["payroll_adjustments"] += float(adj.get("amount") or 0)
-
     return result
-
-
-def get_payroll(token: str, job_id: int) -> dict:
-    """Fetch payroll with a hard 12-second wall-clock timeout via thread."""
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-        future = ex.submit(_fetch_payroll_inner, token, job_id)
-        try:
-            return future.result(timeout=12)
-        except Exception:
-            return dict(EMPTY_PAY)
 
 
 # ── Invoice parsing ──────────────────────────────────────────────────────────
@@ -303,7 +329,7 @@ def fmt(value: float) -> str:
 
 
 def build_row(job: dict, inv: dict, po_cost: float, pay: dict,
-              campaigns: dict, tech_by_job: dict) -> list:
+              campaigns: dict, primary_tech: str) -> list:
     revenue = inv["total"]
 
     material_cost  = inv["material_cost"]
@@ -323,10 +349,8 @@ def build_row(job: dict, inv: dict, po_cost: float, pay: dict,
     total_costs       = total_labor_costs + mat_equip_po
     gross_margin      = revenue - total_costs
 
-    job_id       = job.get("id")
     campaign_id  = job.get("campaignId")
     lead_source  = campaigns.get(campaign_id, "") if campaign_id else ""
-    primary_tech = tech_by_job.get(job_id, "")
 
     row_data = {
         "Job #":                                          job.get("jobNumber", ""),
@@ -439,9 +463,14 @@ def main():
     campaigns = get_campaign_names(token)
     print(f"  {len(campaigns)} campaigns loaded.")
 
-    print("Fetching technician assignments...")
-    tech_by_job = get_technicians_by_job(token, args.from_date, args.to_date)
-    print(f"  {len(tech_by_job)} job(s) have technician data.")
+    print("Fetching technician burden rates...")
+    burden_by_tech = get_technician_burden_rates(token)
+    print(f"  {len(burden_by_tech)} technician burden rates loaded.")
+
+    print(f"Bulk-fetching payroll (lookback {PAYROLL_LOOKBACK_DAYS} days)...")
+    pay_by_job     = get_gross_pay_by_job(token, args.from_date, args.to_date, burden_by_tech)
+    adj_by_invoice = get_adjustments_by_invoice(token, args.from_date)
+    print(f"  payroll for {len(pay_by_job)} job(s); adjustments for {len(adj_by_invoice)} invoice(s).")
 
     output_rows = []
     for i, job in enumerate(jobs, 1):
@@ -456,10 +485,12 @@ def main():
         print(" POs...", end="", flush=True)
         po_cost = get_po_costs(token, job_id)
 
-        print(" payroll...", end="", flush=True)
-        pay = get_payroll(token, job_id)
+        pay = get_payroll_for_job(job_id, invoices, pay_by_job, adj_by_invoice)
 
-        output_rows.append(build_row(job, inv_data, po_cost, pay, campaigns, tech_by_job))
+        print(" tech...", end="", flush=True)
+        primary_tech = get_technician_for_job(token, job_id)
+
+        output_rows.append(build_row(job, inv_data, po_cost, pay, campaigns, primary_tech))
         print(" done")
         time.sleep(0.1)
 

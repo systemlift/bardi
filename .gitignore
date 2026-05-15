@@ -8,3 +8,7 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+
+# Local tooling and logs
+.claude/
+*.log
