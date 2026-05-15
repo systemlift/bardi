@@ -24,7 +24,15 @@ jobs:
       - name: Write service account JSON
         env:
           SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
-        run: printf '%s' "$SA_JSON" > service_account.json
+        run: |
+          printf '%s' "$SA_JSON" > service_account.json
+          size=$(stat -c%s service_account.json)
+          echo "service_account.json size: $size bytes"
+          if [ "$size" -lt 100 ]; then
+            echo "ERROR: GOOGLE_SA_JSON secret is empty or too short."
+            echo "  Expected: the full contents of your service_account.json file (typically >2000 bytes)."
+            exit 1
+          fi
 
       - name: Run report
         env:
