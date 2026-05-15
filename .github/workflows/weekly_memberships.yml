@@ -1,0 +1,35 @@
+name: Weekly Membership Report
+
+on:
+  schedule:
+    - cron: '0 12 * * 0'   # Every Sunday at 7am EST (12:00 UTC)
+  workflow_dispatch:         # Manual trigger anytime from GitHub UI
+
+jobs:
+  run-membership-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write service account JSON
+        run: echo '${{ secrets.GOOGLE_SA_JSON_CONTENT }}' > service_account.json
+
+      - name: Run membership report
+        env:
+          ST_TENANT_ID:       ${{ secrets.ST_TENANT_ID }}
+          ST_CLIENT_ID:       ${{ secrets.ST_CLIENT_ID }}
+          ST_CLIENT_SECRET:   ${{ secrets.ST_CLIENT_SECRET }}
+          ST_APP_KEY:         ${{ secrets.ST_APP_KEY }}
+          GOOGLE_SA_JSON:     service_account.json
+          MEMBERSHIP_SHEET_ID: ${{ secrets.MEMBERSHIP_SHEET_ID }}
+        run: python memberships.py
