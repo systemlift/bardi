@@ -136,9 +136,37 @@ def get_customer(token: str, customer_id: int) -> dict:
 
 
 def get_membership_types(token: str) -> dict:
-    """Returns {membership_type_id: name}."""
+    """Returns {membership_type_id: name}. Fetches active + inactive types,
+    then looks up any still-missing IDs individually (legacy types)."""
+    # Active types
     types = st_get_all(token, f"/memberships/v2/tenant/{ST_TENANT_ID}/membership-types")
-    return {t["id"]: t.get("name", "") for t in types}
+    known = {t["id"]: t.get("name", "") for t in types}
+    # Inactive/legacy types
+    try:
+        inactive = st_get_all(token, f"/memberships/v2/tenant/{ST_TENANT_ID}/membership-types",
+                              {"active": "false"})
+        for t in inactive:
+            if t["id"] not in known:
+                known[t["id"]] = t.get("name", "")
+    except Exception:
+        pass
+    return known
+
+
+def lookup_type_by_id(token: str, type_id: int, type_map: dict) -> str:
+    """Get type name, fetching individually if not in map (legacy IDs)."""
+    if type_id in type_map:
+        return type_map[type_id]
+    try:
+        url = f"{ST_BASE_URL}/memberships/v2/tenant/{ST_TENANT_ID}/membership-types/{type_id}"
+        resp = SESSION.get(url, headers=st_headers(token), timeout=10)
+        if resp.ok:
+            name = resp.json().get("name", f"ID:{type_id}")
+            type_map[type_id] = name   # cache it
+            return name
+    except Exception:
+        pass
+    return f"ID:{type_id}"
 
 
 def get_customer_contacts(token: str, customer_id: int) -> str:
@@ -169,14 +197,14 @@ def extract_phone(customer: dict) -> str:
 
 # ── Build report data ─────────────────────────────────────────────────────────
 
-def build_summary(memberships: list, type_map: dict) -> list[list]:
+def build_summary(token: str, memberships: list, type_map: dict) -> list[list]:
     """Aggregate counts by membership type and status."""
     from collections import defaultdict
     counts = defaultdict(lambda: defaultdict(int))
 
     for m in memberships:
         type_id   = m.get("membershipTypeId")
-        type_name = type_map.get(type_id, f"ID:{type_id}") if type_id else "Unknown"
+        type_name = lookup_type_by_id(token, type_id, type_map) if type_id else "Unknown"
         status    = (m.get("status") or "Unknown").capitalize()
         counts[type_name][status] += 1
 
@@ -286,7 +314,7 @@ def main():
     print(f"  {len(type_map)} membership type(s) loaded.")
 
     print("Building membership summary...")
-    summary_rows = build_summary(memberships, type_map)
+    summary_rows = build_summary(token, memberships, type_map)
 
     print("Building canceled/expired members list...")
     cancelled_rows = build_cancelled(token, memberships, type_map)
