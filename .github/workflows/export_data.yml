@@ -26,7 +26,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Write service account JSON
-        run: echo '${{ secrets.GOOGLE_SA_JSON_CONTENT }}' > service_account.json
+        env:
+          SA_CONTENT: ${{ secrets.GOOGLE_SA_JSON_CONTENT }}
+        run: echo "$SA_CONTENT" > service_account.json
 
       - name: Export data to JSON
         env:
