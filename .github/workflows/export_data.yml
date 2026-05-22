@@ -4,7 +4,7 @@ on:
   workflow_run:
     workflows: ["Daily ServiceTitan Report", "Weekly Membership Report"]
     types: [completed]
-  workflow_dispatch:   # manual trigger anytime
+  workflow_dispatch:
 
 jobs:
   export:
@@ -26,9 +26,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Write service account JSON
+        run: python -c "import os,json; content=os.environ['SA_CONTENT']; json.loads(content); open('service_account.json','w').write(content)"
         env:
           SA_CONTENT: ${{ secrets.GOOGLE_SA_JSON }}
-        run: echo "$SA_CONTENT" > service_account.json
 
       - name: Export data to JSON
         env:
