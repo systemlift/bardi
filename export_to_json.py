@@ -16,7 +16,7 @@ load_dotenv()
 
 SHEET_ID            = os.environ["GOOGLE_SHEET_ID"]
 MEMBERSHIP_SHEET_ID = os.environ["MEMBERSHIP_SHEET_ID"]
-SA_JSON_PATH        = os.environ["GOOGLE_SA_JSON"]
+SA_JSON_PATH        = os.environ.get("GOOGLE_SA_JSON", "service_account.json")
 SHEET_TAB           = os.environ.get("GOOGLE_SHEET_TAB", "Sheet1")
 SCOPES              = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 
@@ -38,7 +38,14 @@ PCT_FIELDS = {
 
 
 def sheets_client():
-    creds = Credentials.from_service_account_file(SA_JSON_PATH, scopes=SCOPES)
+    # In GitHub Actions, credentials are passed as JSON content via env var
+    sa_content = os.environ.get("GOOGLE_SA_JSON_CONTENT")
+    if sa_content:
+        import tempfile
+        info = json.loads(sa_content)
+        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+    else:
+        creds = Credentials.from_service_account_file(SA_JSON_PATH, scopes=SCOPES)
     return build("sheets", "v4", credentials=creds)
 
 
