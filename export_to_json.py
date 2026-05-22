@@ -3,8 +3,6 @@
 Exports Google Sheets data to JSON files for the Bardi dashboard.
 Reads: Job Summary Sheet + Membership Sheet
 Writes: data/jobs.json, data/memberships.json, data/config.json
-
-Run manually or via GitHub Actions after daily/weekly data pulls.
 """
 
 import os
@@ -25,7 +23,18 @@ SCOPES              = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 SUMMARY_TAB   = "Membership Summary"
 CANCELLED_TAB = "Canceled & Expired Members"
 CONFIG_TAB    = "Config"
-DAYS_TO_KEEP  = 90   # export last 90 days so dashboard can show custom ranges
+DAYS_TO_KEEP  = 90
+
+EXCEL_EPOCH = datetime(1899, 12, 30)
+
+PCT_FIELDS = {
+    "Jobs Gross Margin %", "Payroll Adjustments as % of Sales",
+    "Material Costs As % of Sales", "PO/Bill Costs As % of Sales",
+    "Equip. Costs As % of Sales",
+    "Materials + Equip. + PO/Bill Costs As % of Sales",
+    "Total Cost As % of Sales", "Performance Pay as % of Sales",
+    "Labor Pay as % of Sales", "Labor Burden as % of Sales",
+}
 
 
 def sheets_client():
@@ -45,6 +54,32 @@ def read_tab(svc, sheet_id, tab_name):
         return []
 
 
+def excel_serial_to_date(val):
+    """Convert Excel serial number (e.g. 46156) to YYYY-MM-DD string."""
+    try:
+        n = int(float(val))
+        if 40000 < n < 60000:
+            return (EXCEL_EPOCH + timedelta(days=n)).strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        pass
+    return val
+
+
+def fix_pct(val):
+    """Convert raw 0-1 decimal to percentage string if needed."""
+    if not val or val == '':
+        return val
+    if isinstance(val, str) and '%' in val:
+        return val
+    try:
+        f = float(val)
+        if -2 < f < 2:
+            return f"{f * 100:.2f}%"
+    except (ValueError, TypeError):
+        pass
+    return val
+
+
 def rows_to_dicts(rows):
     if not rows or len(rows) < 2:
         return []
@@ -58,10 +93,18 @@ def rows_to_dicts(rows):
     return result
 
 
+def clean_job_row(row):
+    row["Invoice Date"] = excel_serial_to_date(row.get("Invoice Date", ""))
+    for field in PCT_FIELDS:
+        if field in row:
+            row[field] = fix_pct(row[field])
+    return row
+
+
 def export_jobs(svc):
     print(f"Reading job data from '{SHEET_TAB}'...")
     rows = read_tab(svc, SHEET_ID, SHEET_TAB)
-    all_jobs = rows_to_dicts(rows)
+    all_jobs = [clean_job_row(r) for r in rows_to_dicts(rows)]
     print(f"  {len(all_jobs)} total rows in sheet.")
 
     cutoff = (datetime.now() - timedelta(days=DAYS_TO_KEEP)).strftime("%Y-%m-%d")
@@ -79,7 +122,7 @@ def export_jobs(svc):
 
 def export_memberships(svc):
     print("Reading membership data...")
-    summary_rows  = read_tab(svc, MEMBERSHIP_SHEET_ID, SUMMARY_TAB)
+    summary_rows   = read_tab(svc, MEMBERSHIP_SHEET_ID, SUMMARY_TAB)
     cancelled_rows = read_tab(svc, MEMBERSHIP_SHEET_ID, CANCELLED_TAB)
 
     os.makedirs("data", exist_ok=True)
@@ -96,7 +139,7 @@ def export_config(svc):
     print("Reading config...")
     config = {}
     rows = read_tab(svc, SHEET_ID, CONFIG_TAB)
-    for row in rows[1:]:          # skip header row
+    for row in rows[1:]:
         if len(row) >= 2 and row[0]:
             config[row[0]] = row[1]
     if not config:
