@@ -83,7 +83,8 @@ SHEET_COLUMNS = [
 
 # ── Session + auth ───────────────────────────────────────────────────────────
 
-SESSION = requests.Session()  # reuse TCP connections across all calls
+SESSION = requests.Session()
+_CURRENT_TOKEN = ""   # set in main() for technician fallback lookups
 
 
 def get_st_token() -> str:
@@ -170,15 +171,50 @@ def get_campaign_names(token: str) -> dict:
     return {c["id"]: c.get("name", "") for c in campaigns}
 
 
-def get_technician_for_job(token: str, job_id: int) -> str:
-    """Return the first assigned technician's name for a job (empty if none)."""
-    assignments = st_get_all(token, f"/dispatch/v2/tenant/{ST_TENANT_ID}/appointment-assignments", {
-        "jobId": job_id,
-    })
+# Cache: {job_id: technician_name} — populated by load_tech_cache()
+_TECH_CACHE = {}
+
+
+def load_tech_cache(token: str, from_date: str, to_date: str):
+    """Pre-fetch all appointment assignments for the date range."""
+    global _TECH_CACHE
+    print("  Pre-fetching technician assignments...", end="", flush=True)
+    assignments = st_get_all(
+        token,
+        f"/dispatch/v2/tenant/{ST_TENANT_ID}/appointment-assignments",
+        {
+            "modifiedOnOrAfter": f"{from_date}T00:00:00Z",
+            "modifiedBefore":    f"{to_date}T23:59:59Z",
+        }
+    )
     for a in assignments:
+        jid  = a.get("jobId")
         name = a.get("technicianName") or ""
-        if name:
-            return name
+        if jid and name and jid not in _TECH_CACHE:
+            _TECH_CACHE[jid] = name
+    print(f" {len(_TECH_CACHE)} assignments cached")
+
+
+def get_technician_for_job(token: str, job_id: int) -> str:
+    """Look up technician from pre-fetched cache, fall back to direct API call."""
+    if job_id in _TECH_CACHE:
+        return _TECH_CACHE[job_id]
+    # Fallback: direct lookup for jobs not in cache
+    try:
+        resp = SESSION.get(
+            f"{ST_BASE_URL}/dispatch/v2/tenant/{ST_TENANT_ID}/appointment-assignments",
+            headers=st_headers(_CURRENT_TOKEN),
+            params={"jobId": job_id, "pageSize": 10},
+            timeout=10
+        )
+        if resp.ok:
+            for a in resp.json().get("data", []):
+                name = a.get("technicianName") or ""
+                if name:
+                    _TECH_CACHE[job_id] = name
+                    return name
+    except Exception:
+        pass
     return ""
 
 
@@ -292,12 +328,16 @@ def parse_invoices(invoices: list) -> dict:
     for invoice in invoices:
         out["subtotal"] += float(invoice.get("subTotal",  0) or 0)
         out["tax"]      += float(invoice.get("salesTax",  0) or 0)
-        out["total"]    += float(invoice.get("total",     0) or 0)
+
+        # Use adjustedTotal if available (includes credits/adjustments),
+        # fall back to total. Some jobs have offsetting line items that
+        # make invoice.total = 0 even when the job has revenue.
+        inv_total = float(invoice.get("adjustedTotal") or invoice.get("total") or 0)
+        out["total"] += inv_total
 
         # payments = what has been paid = total - remaining balance
-        total   = float(invoice.get("total",   0) or 0)
         balance = float(invoice.get("balance", 0) or 0)
-        out["payments"] += max(total - balance, 0)
+        out["payments"] += max(inv_total - balance, 0)
 
         # Line items — split by type
         for item in (invoice.get("items") or []):
@@ -463,6 +503,8 @@ def main():
     campaigns = get_campaign_names(token)
     print(f"  {len(campaigns)} campaigns loaded.")
 
+    global _CURRENT_TOKEN
+    _CURRENT_TOKEN = token
     print("Fetching technician burden rates...")
     burden_by_tech = get_technician_burden_rates(token)
     print(f"  {len(burden_by_tech)} technician burden rates loaded.")
