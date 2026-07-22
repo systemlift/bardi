@@ -234,6 +234,23 @@ def get_technician_burden_rates(token: str) -> dict:
     return {t["id"]: float(t.get("burdenRate") or 0) for t in techs if t.get("id")}
 
 
+def get_technician_names(token: str) -> dict:
+    """Return {technicianId: name}.
+
+    A job's soldById references a technician id (the comfort advisor / seller),
+    NOT a settings/employees id — those id spaces differ, so employee lookups
+    return nothing. This map resolves soldById to a rep name for the "Sold By"
+    column and the dashboard's By Sales Rep view.
+    """
+    techs = st_get_all(token, f"/settings/v2/tenant/{ST_TENANT_ID}/technicians")
+    out = {}
+    for t in techs:
+        tech_id = t.get("id")
+        if tech_id:
+            out[tech_id] = t.get("name") or f"{t.get('firstName', '')} {t.get('lastName', '')}".strip()
+    return out
+
+
 def get_gross_pay_by_job(token: str, from_date: str, to_date: str, burden_by_tech: dict) -> dict:
     """Bulk-fetch gross-pay-items for the window and bucket by jobId.
     Labor burden = sum(paidDurationHours * technician.burdenRate)."""
@@ -369,8 +386,11 @@ def fmt(value: float) -> str:
 
 
 def build_row(job: dict, inv: dict, po_cost: float, pay: dict,
-              campaigns: dict, primary_tech: str) -> list:
+              campaigns: dict, primary_tech: str, seller_names: dict) -> list:
     revenue = inv["total"]
+
+    seller_id = job.get("soldById")
+    sold_by   = seller_names.get(seller_id, "") if seller_id else ""
 
     material_cost  = inv["material_cost"]
     equipment_cost = inv["equipment_cost"]
@@ -419,7 +439,7 @@ def build_row(job: dict, inv: dict, po_cost: float, pay: dict,
         "Jobs Gross Margin":                              fmt(gross_margin),
         "Jobs Gross Margin %":                            pct(gross_margin, revenue),
         "Jobs Subtotal":                                  fmt(inv["subtotal"]),
-        "Sold By":                                        "",  # soldById needs employee lookup
+        "Sold By":                                        sold_by,
         "Primary Technician":                             primary_tech,
         "Total Technician Paid Time":                     fmt(paid_hours),
         "Jobs Total Revenue":                             fmt(revenue),
@@ -509,6 +529,10 @@ def main():
     burden_by_tech = get_technician_burden_rates(token)
     print(f"  {len(burden_by_tech)} technician burden rates loaded.")
 
+    print("Fetching technician/seller names...")
+    seller_names = get_technician_names(token)
+    print(f"  {len(seller_names)} technician name(s) loaded.")
+
     print(f"Bulk-fetching payroll (lookback {PAYROLL_LOOKBACK_DAYS} days)...")
     pay_by_job     = get_gross_pay_by_job(token, args.from_date, args.to_date, burden_by_tech)
     adj_by_invoice = get_adjustments_by_invoice(token, args.from_date)
@@ -532,7 +556,7 @@ def main():
         print(" tech...", end="", flush=True)
         primary_tech = get_technician_for_job(token, job_id)
 
-        output_rows.append(build_row(job, inv_data, po_cost, pay, campaigns, primary_tech))
+        output_rows.append(build_row(job, inv_data, po_cost, pay, campaigns, primary_tech, seller_names))
         print(" done")
         time.sleep(0.1)
 
