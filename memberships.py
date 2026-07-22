@@ -197,29 +197,48 @@ def extract_phone(customer: dict) -> str:
 
 # ── Build report data ─────────────────────────────────────────────────────────
 
-def build_summary(token: str, memberships: list, type_map: dict) -> list[list]:
-    """Aggregate counts by membership type and status."""
+def _type_name(token: str, membership: dict, type_map: dict) -> str:
+    type_id = membership.get("membershipTypeId")
+    return lookup_type_by_id(token, type_id, type_map) if type_id else "Unknown"
+
+
+def build_summary(token: str, full_memberships: list, recent_memberships: list,
+                  type_map: dict) -> list[list]:
+    """Aggregate counts by membership type and status.
+
+    Active + Suspended are counted from the FULL membership base, so the summary
+    reflects the true current book of business. Canceled + Expired are counted
+    from the RECENT window only (this period's churn) — otherwise years of
+    historical expirations (tens of thousands of records) would swamp the table
+    and the Status Distribution chart. Recent churn detail also lives, per
+    member, in the Canceled & Expired tab.
+    """
     from collections import defaultdict
     counts = defaultdict(lambda: defaultdict(int))
 
-    for m in memberships:
-        type_id   = m.get("membershipTypeId")
-        type_name = lookup_type_by_id(token, type_id, type_map) if type_id else "Unknown"
-        status    = (m.get("status") or "Unknown").capitalize()
-        counts[type_name][status] += 1
+    # Current members (Active / Suspended) from the full base.
+    for m in full_memberships:
+        status = (m.get("status") or "").capitalize()
+        if status in ("Active", "Suspended"):
+            counts[_type_name(token, m, type_map)][status] += 1
+
+    # Churn (Canceled / Expired) from the recent window only.
+    for m in recent_memberships:
+        status = (m.get("status") or "").lower()
+        if status in ("canceled", "cancelled"):
+            counts[_type_name(token, m, type_map)]["Canceled"] += 1
+        elif status == "expired":
+            counts[_type_name(token, m, type_map)]["Expired"] += 1
 
     rows = [SUMMARY_HEADERS]
     for type_name in sorted(counts.keys()):
         c = counts[type_name]
-        total = sum(c.values())
-        rows.append([
-            type_name,
-            c.get("Active", 0),
-            c.get("Canceled", 0),
-            c.get("Suspended", 0),
-            c.get("Expired", 0),
-            total,
-        ])
+        active    = c.get("Active", 0)
+        canceled  = c.get("Canceled", 0)
+        suspended = c.get("Suspended", 0)
+        expired   = c.get("Expired", 0)
+        total     = active + canceled + suspended + expired
+        rows.append([type_name, active, canceled, suspended, expired, total])
     return rows
 
 
@@ -297,27 +316,34 @@ def main():
     parser.add_argument("--to",   dest="to_date",   default=today,    metavar="YYYY-MM-DD")
     args = parser.parse_args()
 
-    print(f"Date range: {args.from_date} to {args.to_date}")
+    print(f"Churn window: {args.from_date} to {args.to_date}")
     print("Authenticating to ServiceTitan...")
     token = get_st_token()
 
-    print("Fetching memberships...")
-    memberships = get_all_memberships(token, from_date=args.from_date, to_date=args.to_date)
-    print(f"  {len(memberships)} membership record(s) found in range.")
+    # Full base drives Active/Suspended counts (the true current book).
+    print("Fetching all memberships (full base)...")
+    full_memberships = get_all_memberships(token)
+    print(f"  {len(full_memberships)} total membership record(s).")
 
-    if not memberships:
+    if not full_memberships:
         print("No membership data returned. Check API permissions.")
         sys.exit(0)
+
+    # Recent window drives Canceled/Expired (this period's churn) and the
+    # per-member Canceled & Expired list.
+    print("Fetching recent memberships (churn window)...")
+    recent_memberships = get_all_memberships(token, from_date=args.from_date, to_date=args.to_date)
+    print(f"  {len(recent_memberships)} membership record(s) modified in range.")
 
     print("Fetching membership types...")
     type_map = get_membership_types(token)
     print(f"  {len(type_map)} membership type(s) loaded.")
 
-    print("Building membership summary...")
-    summary_rows = build_summary(token, memberships, type_map)
+    print("Building membership summary (full base + recent churn)...")
+    summary_rows = build_summary(token, full_memberships, recent_memberships, type_map)
 
     print("Building canceled/expired members list...")
-    cancelled_rows = build_cancelled(token, memberships, type_map)
+    cancelled_rows = build_cancelled(token, recent_memberships, type_map)
 
     print("Connecting to Google Sheets...")
     svc = sheets_client()
