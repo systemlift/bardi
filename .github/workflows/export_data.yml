@@ -44,3 +44,29 @@ jobs:
           # so there is no CI loop to guard against.
           git diff --staged --quiet || git commit -m "chore: update dashboard data"
           git push
+
+      - name: Trigger Netlify deploy
+        # Netlify normally rebuilds by itself on push, via its GitHub integration.
+        # That link stopped firing between 2026-08-09 and 2026-08-12 with no error
+        # anywhere: every workflow here stayed green while the live dashboard served
+        # three-day-old numbers. Asking Netlify to build directly removes the silent
+        # dependency. Harmless if the GitHub integration is also working — a
+        # duplicate build just overwrites with the same content.
+        #
+        # To enable: Netlify -> Site settings -> Build & deploy -> Build hooks ->
+        # "Add build hook" (branch: master), then save the generated URL as a repo
+        # secret named NETLIFY_BUILD_HOOK. Until then this step no-ops.
+        env:
+          HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "NETLIFY_BUILD_HOOK is not set - skipping explicit deploy trigger."
+            echo "The dashboard will only update if Netlify's GitHub integration fires."
+            exit 0
+          fi
+          code=$(curl -sS -X POST -o /dev/null -w '%{http_code}' "$HOOK")
+          echo "Netlify build hook responded: HTTP $code"
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "ERROR: Netlify did not accept the build request."
+            exit 1
+          fi
