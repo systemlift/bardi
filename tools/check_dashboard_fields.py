@@ -61,10 +61,39 @@ def find_job_field_reads(html):
 
 
 def load_allowlist():
-    sys.path.insert(0, REPO_ROOT)
-    import export_to_json
+    """Read the two field lists out of export_to_json.py *without importing it*.
 
-    return list(export_to_json.DASHBOARD_JOB_FIELDS), list(export_to_json.JOB_COLUMNS)
+    export_to_json reads os.environ["GOOGLE_SHEET_ID"] at import time, so
+    importing it here would make this check depend on the Google/ServiceTitan
+    secrets. It runs in CI before those are needed, and should stay runnable by
+    anyone who just cloned the repo. Parsing the AST keeps it credential-free.
+    """
+    import ast
+
+    src_path = os.path.join(REPO_ROOT, "export_to_json.py")
+    with open(src_path, encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=src_path)
+
+    found = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in (
+                "DASHBOARD_JOB_FIELDS",
+                "JOB_COLUMNS",
+            ):
+                found[target.id] = ast.literal_eval(node.value)
+
+    for name in ("DASHBOARD_JOB_FIELDS", "JOB_COLUMNS"):
+        if name not in found:
+            raise SystemExit(
+                f"ERROR: could not find {name} as a module-level list in "
+                f"{src_path}. If it was renamed or moved inside a function, "
+                "update this check to match."
+            )
+
+    return list(found["DASHBOARD_JOB_FIELDS"]), list(found["JOB_COLUMNS"])
 
 
 def main():
