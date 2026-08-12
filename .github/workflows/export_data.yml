@@ -25,6 +25,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Check dashboard fields are still in sync
+        # jobs.json only carries the columns the dashboard reads. If someone adds
+        # a new j["Field"] to index.html without adding it to DASHBOARD_JOB_FIELDS,
+        # that view would render zeros with no error anywhere. Fail here instead,
+        # before we publish a subtly wrong dashboard.
+        run: python tools/check_dashboard_fields.py
+
       - name: Export data to JSON
         env:
           GOOGLE_SA_JSON_CONTENT: ${{ secrets.GOOGLE_SA_JSON }}

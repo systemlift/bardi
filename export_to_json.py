@@ -65,6 +65,36 @@ JOB_COLUMNS = [
     "Labor Burden as % of Sales", "Returns", "Total Labor Costs",
 ]
 
+# The only job fields dashboard/index.html actually reads. jobs.json is fetched
+# in full on every page load, so shipping all 39 columns meant ~10 MB per visit
+# for data the UI never touches — the likely driver behind Netlify's bandwidth
+# usage. Exporting just these cuts the payload by roughly three quarters.
+#
+# Every entry below is a real read site in index.html: either j["Field"] in a
+# render/agg function, or a groupBy(jobs, 'Field') key. Fields that only appear
+# in the mock-data generator (Tax, Jobs Payments, Returns, Jobs Gross Margin %)
+# are deliberately absent — nothing reads them back. Margin % is computed in
+# agg() from revenue and margin, so it does not need to be exported.
+#
+# DO NOT edit this list by hand without re-running the drift check:
+#     python tools/check_dashboard_fields.py
+# CI runs it before every export, so if someone adds a j["New Field"] to the
+# dashboard without adding it here, the export fails loudly instead of quietly
+# rendering blanks. Order matches JOB_COLUMNS for readable diffs.
+DASHBOARD_JOB_FIELDS = [
+    "Job #",
+    "Customer Name",
+    "Invoice Date",
+    "Job Type",
+    "Business Unit",
+    "Material Costs",
+    "Jobs Gross Margin",
+    "Sold By",
+    "Primary Technician",
+    "Jobs Total Revenue",
+    "Total Labor Costs",
+]
+
 
 def is_job_row(row):
     """A job row is any row whose first cell is a numeric Job #.
@@ -186,11 +216,28 @@ def export_jobs(svc):
     job_rows = [r for r in rows if is_job_row(r)]
     skipped  = len(rows) - len(job_rows)
 
+    # Guard: if the sheet layout drifts (run.py reorders SHEET_COLUMNS, someone
+    # renames a header), a field the dashboard needs could silently vanish and
+    # every affected view would render zeros. Fail the export instead.
+    missing = [f for f in DASHBOARD_JOB_FIELDS if f not in header]
+    if missing:
+        raise SystemExit(
+            "ERROR: job columns the dashboard needs are missing from the sheet: "
+            f"{missing}\n"
+            f"  Sheet tab: {SHEET_TAB}\n"
+            "  Either the sheet header changed or run.py's SHEET_COLUMNS was "
+            "reordered. Fix the source, or update DASHBOARD_JOB_FIELDS and "
+            "dashboard/index.html together."
+        )
+
     all_jobs = []
     for r in job_rows:
         padded = list(r) + [""] * (len(header) - len(r))
-        all_jobs.append(clean_job_row(dict(zip(header, padded))))
+        row = clean_job_row(dict(zip(header, padded)))
+        # Project down to just the fields the dashboard reads (see above).
+        all_jobs.append({f: row.get(f, "") for f in DASHBOARD_JOB_FIELDS})
     print(f"  {len(all_jobs)} job rows ({skipped} non-job rows skipped).")
+    print(f"  Keeping {len(DASHBOARD_JOB_FIELDS)} of {len(header)} columns per row.")
 
     cutoff = (datetime.now() - timedelta(days=DAYS_TO_KEEP)).strftime("%Y-%m-%d")
     filtered = [r for r in all_jobs if r.get("Invoice Date", "") >= cutoff]
@@ -203,7 +250,10 @@ def export_jobs(svc):
             "exported_at": datetime.utcnow().isoformat() + "Z",
             "rows": filtered
         }, f, separators=(",", ":"))
-    print(f"  Wrote {out_path}")
+    # Every dashboard visit downloads this file whole, so keep its size visible
+    # in the CI log — a sudden jump means the payload trim regressed.
+    size_mb = os.path.getsize(out_path) / (1024 * 1024)
+    print(f"  Wrote {out_path} ({size_mb:.2f} MB)")
 
 
 def export_memberships(svc):
