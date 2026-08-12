@@ -12,3 +12,7 @@ venv/
 # Local tooling and logs
 .claude/
 *.log
+
+# Ad-hoc API exploration scratch — keep these local, they are not tests
+debug_*.py
+test_*.py

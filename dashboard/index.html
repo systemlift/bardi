@@ -6,8 +6,12 @@
 <title>Bardi · Performance Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- Vendored locally (not CDN) so charts and Excel export keep working even if a
+     third-party CDN is down or blocked by the client's network. To upgrade, replace
+     the file in dashboard/vendor/ and update the version comment below.
+     Chart.js 4.4.1  ·  SheetJS xlsx 0.18.5 -->
+<script src="vendor/chart.umd.min.js"></script>
+<script src="vendor/xlsx.full.min.js"></script>
 <style>
 :root {
   --navy:#1B4D8E; --navy-dk:#13376A; --navy-lt:#2A5FA8;

@@ -1,0 +1,6 @@
+# Vendored third-party libraries: keep byte-for-byte as downloaded from the CDN
+# so they stay verifiable against the upstream checksums recorded in dashboard/vendor/README.md.
+dashboard/vendor/** -text
+
+# Generated data files — always LF, never merged by hand
+dashboard/data/*.json text eol=lf
